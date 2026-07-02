@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>極限躲避球 RWD</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #1a1a2e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            max-width: 800px; /* 限制最大寬度，保持遊玩體驗 */
+            max-height: 1000px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background: #16213e;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* 蓋板 UI 樣式 */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 52, 96, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+            z-index: 10;
+            transition: opacity 0.3s ease;
+        }
+        .overlay.hidden {
+            display: none;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #e94560;
+            text-shadow: 0 0 10px rgba(233, 69, 96, 0.5);
+        }
+        p {
+            font-size: 1.1rem;
+            margin-bottom: 30px;
+            color: #0f4c81;
+            color: #c5d3e8;
+            text-align: center;
+            padding: 0 20px;
+        }
+        button {
+            padding: 12px 35px;
+            font-size: 1.3rem;
+            background-color: #e94560;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(233, 69, 96, 0.4);
+            transition: transform 0.1s, background 0.2s;
+        }
+        button:active {
+            transform: scale(0.95);
+            background-color: #cc3750;
+        }
+        #scoreBoard {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            font-size: 1.5rem;
+            font-weight: bold;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <div id="scoreBoard">分數: 0</div>
+    
+    <div id="startOverlay" class="overlay">
+        <h1>極限躲避球</h1>
+        <p>左右滑動/移動滑鼠/方向鍵<br>躲避從天而降的紅色躲避球！</p>
+        <button id="startBtn">開始遊戲</button>
+    </div>
+
+    <div id="gameOverOverlay" class="overlay hidden">
+        <h1>GAME OVER</h1>
+        <p id="finalScoreText">你的分數: 0</p>
+        <button id="restartBtn">再試一次</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('gameContainer');
+    const scoreBoard = document.getElementById('scoreBoard');
+    const startOverlay = document.getElementById('startOverlay');
+    const gameOverOverlay = document.getElementById('gameOverOverlay');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const finalScoreText = document.getElementById('finalScoreText');
+
+    // 遊戲狀態
+    let gameState = 'START'; // START, PLAYING, GAMEOVER
+    let score = 0;
+    let animationFrameId;
+
+    // 邏輯解析度 (固定內部解析度，達成真正響應式縮放)
+    const LOGICAL_WIDTH = 600;
+    const LOGICAL_HEIGHT = 800;
+
+    // 玩家物件
+    const player = {
+        x: LOGICAL_WIDTH / 2,
+        y: LOGICAL_HEIGHT - 60,
+        radius: 20,
+        color: '#00fff5',
+        speed: 8
+    };
+
+    // 鍵盤狀態
+    let keys = { Left: false, Right: false };
+
+    // 躲避球陣列與生成參數
+    let balls = [];
+    let ballSpawnTimer = 0;
+    let ballSpawnInterval = 30; // 每幾幀生成一顆球
+    let baseBallSpeed = 4;
+
+    // 初始化與響應式 Canvas 縮放
+    function resizeCanvas() {
+        const scaleX = container.clientWidth / LOGICAL_WIDTH;
+        const scaleY = container.clientHeight / LOGICAL_HEIGHT;
+        // 保持 Canvas 的渲染解析度不變，透過 CSS 縮放
+        canvas.width = LOGICAL_WIDTH;
+        canvas.height = LOGICAL_HEIGHT;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // --- 事件監聽 (控制核心) ---
+
+    // 1. 鍵盤控制 (PC)
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'a') keys.Left = true;
+        if (e.key === 'ArrowRight' || e.key === 'd') keys.Right = true;
+    });
+    window.addEventListener('keyup', (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'a') keys.Left = false;
+        if (e.key === 'ArrowRight' || e.key === 'd') keys.Right = false;
+    });
+
+    // 2. 滑鼠與觸控通用轉換函式
+    function getCanvasX(clientX) {
+        const rect = canvas.getBoundingClientRect();
+        // 將實際螢幕的 X 座標轉換為 Canvas 內部的邏輯 X 座標
+        return ((clientX - rect.left) / rect.width) * LOGICAL_WIDTH;
+    }
+
+    // 滑鼠控制
+    canvas.addEventListener('mousemove', (e) => {
+        if (gameState !== 'PLAYING') return;
+        player.x = getCanvasX(e.clientX);
+    });
+
+    // 觸控控制 (行動載具)
+    canvas.addEventListener('touchmove', (e) => {
+        if (gameState !== 'PLAYING') return;
+        if (e.touches.length > 0) {
+            player.x = getCanvasX(e.touches[0].clientX);
+            e.preventDefault(); // 防止手機網頁跟著滾動
+        }
+    }, { passive: false });
+
+
+    // --- 遊戲邏輯 ---
+
+    function spawnBall() {
+        const radius = Math.random() * 15 + 10; // 球體大小隨機 10~25
+        balls.push({
+            x: Math.random() * (LOGICAL_WIDTH - radius * 2) + radius,
+            y: -radius,
+            radius: radius,
+            // 速度隨著分數微幅提升
+            speed: (Math.random() * 3 + baseBallSpeed) + (score * 0.1),
+            color: '#e94560'
+        });
+    }
+
+    function initGame() {
+        score = 0;
+        balls = [];
+        player.x = LOGICAL_WIDTH / 2;
+        ballSpawnTimer = 0;
+        scoreBoard.innerText = `分數: ${score}`;
+        gameState = 'PLAYING';
+    }
+
+    function gameOver() {
+        gameState = 'GAMEOVER';
+        cancelAnimationFrame(animationFrameId);
+        finalScoreText.innerText = `你的分數: ${score}`;
+        gameOverOverlay.classList.remove('hidden');
+    }
+
+    // 圓形碰撞偵測公式
+    function checkCollision(circle1, circle2) {
+        const dx = circle1.x - circle2.x;
+        const dy = circle1.y - circle2.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < circle1.radius + circle2.radius;
+    }
+
+    // 遊戲主迴圈
+    function gameLoop() {
+        if (gameState !== 'PLAYING') return;
+
+        // 清空畫布
+        ctx.clearRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+        // 1. 更新玩家位置 (鍵盤部分)
+        if (keys.Left) player.x -= player.speed;
+        if (keys.Right) player.x += player.speed;
+
+        // 玩家邊界限制
+        if (player.x < player.radius) player.x = player.radius;
+        if (player.x > LOGICAL_WIDTH - player.radius) player.x = LOGICAL_WIDTH - player.radius;
+
+        // 2. 繪製玩家
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = player.color;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = player.color;
+        ctx.fill();
+        ctx.closePath();
+        ctx.shadowBlur = 0; // 重設發光
+
+        // 3. 處理躲避球生成
+        ballSpawnTimer++;
+        if (ballSpawnTimer >= ballSpawnInterval) {
+            spawnBall();
+            ballSpawnTimer = 0;
+        }
+
+        // 4. 更新與繪製躲避球
+        for (let i = balls.length - 1; i >= 0; i--) {
+            let ball = balls[i];
+            ball.y += ball.speed;
+
+            // 繪製球體
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = ball.color;
+            ctx.fill();
+            ctx.closePath();
+
+            // 碰撞偵測
+            if (checkCollision(player, ball)) {
+                gameOver();
+                return;
+            }
+
+            // 超出螢幕則移除並加分
+            if (ball.y - ball.radius > LOGICAL_HEIGHT) {
+                balls.splice(i, 1);
+                score++;
+                scoreBoard.innerText = `分數: ${score}`;
+            }
+        }
+
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+
+    // --- UI 按鈕事件 ---
+    startBtn.addEventListener('click', () => {
+        startOverlay.classList.add('hidden');
+        initGame();
+        gameLoop();
+    });
+
+    restartBtn.addEventListener('click', () => {
+        gameOverOverlay.classList.add('hidden');
+        initGame();
+        gameLoop();
+    });
+</script>
+
+</body>
+</html>
